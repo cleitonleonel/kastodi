@@ -47,7 +47,8 @@ def cast_button_pressed():
 
     progress_dialog = xbmcgui.DialogProgress()
     progress_dialog.create("Discovering cast devices...")
-    chromecasts = pychromecast.get_chromecasts_as_dict(tries=TRIES).keys()
+    chromecasts = [cc.device.friendly_name for cc in pychromecast.get_chromecasts()]
+    print(chromecasts)
     if progress_dialog.iscanceled():
         progress_dialog.close()
         return
@@ -69,17 +70,19 @@ def start_casting(chromecast_name):
     :type chromecast_name: str
     :return: None
     """
-
+    chromecasts = pychromecast.get_chromecasts()
     progress_dialog = xbmcgui.DialogProgress()
     progress_dialog.create("Connecting to " + chromecast_name + "...")
-    cast = pychromecast.get_chromecast(friendly_name=chromecast_name,
-                                       tries=TRIES)
+    cast = next(cc for cc in chromecasts if cc.device.friendly_name == chromecast_name)
     if not cast:
         error("Couldn't connect to " + chromecast_name)
         return
     cast.wait()
     player = xbmc.Player()
     url = player.getPlayingFile()
+    if '|Referer' in url:
+        print(url.split('|Referer')[0])
+        url = url.split('|Referer')[0]
     debug("url: " + url)
     url = transform_url(url)
     debug("transformed url: " + str(url))

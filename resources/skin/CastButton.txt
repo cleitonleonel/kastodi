@@ -1,8 +1,8 @@
 <!-- kastodi_start -->
 <control type="button">
 	<description>Cast button</description>
-	<left>122r</left>
-	<top>50</top>
+	<left>100r</left>
+	<top>100</top>
 	<width>72</width>
 	<height>72</height>
 	<onclick>RunPlugin(plugin://script.kastodi)</onclick>

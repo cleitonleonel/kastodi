@@ -7,7 +7,6 @@ from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from google.protobuf import reflection as _reflection
 from google.protobuf import symbol_database as _symbol_database
-from google.protobuf import descriptor_pb2
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
@@ -19,9 +18,11 @@ DESCRIPTOR = _descriptor.FileDescriptor(
   name='google/protobuf/wrappers.proto',
   package='google.protobuf',
   syntax='proto3',
-  serialized_pb=_b('\n\x1egoogle/protobuf/wrappers.proto\x12\x0fgoogle.protobuf\"\x1c\n\x0b\x44oubleValue\x12\r\n\x05value\x18\x01 \x01(\x01\"\x1b\n\nFloatValue\x12\r\n\x05value\x18\x01 \x01(\x02\"\x1b\n\nInt64Value\x12\r\n\x05value\x18\x01 \x01(\x03\"\x1c\n\x0bUInt64Value\x12\r\n\x05value\x18\x01 \x01(\x04\"\x1b\n\nInt32Value\x12\r\n\x05value\x18\x01 \x01(\x05\"\x1c\n\x0bUInt32Value\x12\r\n\x05value\x18\x01 \x01(\r\"\x1a\n\tBoolValue\x12\r\n\x05value\x18\x01 \x01(\x08\"\x1c\n\x0bStringValue\x12\r\n\x05value\x18\x01 \x01(\t\"\x1b\n\nBytesValue\x12\r\n\x05value\x18\x01 \x01(\x0c\x42S\n\x13\x63om.google.protobufB\rWrappersProtoP\x01\xa0\x01\x01\xf8\x01\x01\xa2\x02\x03GPB\xaa\x02\x1eGoogle.Protobuf.WellKnownTypesb\x06proto3')
+    serialized_options=_b(
+        '\n\023com.google.protobufB\rWrappersProtoP\001Z*github.com/golang/protobuf/ptypes/wrappers\370\001\001\242\002\003GPB\252\002\036Google.Protobuf.WellKnownTypes'),
+    serialized_pb=_b(
+        '\n\x1egoogle/protobuf/wrappers.proto\x12\x0fgoogle.protobuf\"\x1c\n\x0b\x44oubleValue\x12\r\n\x05value\x18\x01 \x01(\x01\"\x1b\n\nFloatValue\x12\r\n\x05value\x18\x01 \x01(\x02\"\x1b\n\nInt64Value\x12\r\n\x05value\x18\x01 \x01(\x03\"\x1c\n\x0bUInt64Value\x12\r\n\x05value\x18\x01 \x01(\x04\"\x1b\n\nInt32Value\x12\r\n\x05value\x18\x01 \x01(\x05\"\x1c\n\x0bUInt32Value\x12\r\n\x05value\x18\x01 \x01(\r\"\x1a\n\tBoolValue\x12\r\n\x05value\x18\x01 \x01(\x08\"\x1c\n\x0bStringValue\x12\r\n\x05value\x18\x01 \x01(\t\"\x1b\n\nBytesValue\x12\r\n\x05value\x18\x01 \x01(\x0c\x42|\n\x13\x63om.google.protobufB\rWrappersProtoP\x01Z*github.com/golang/protobuf/ptypes/wrappers\xf8\x01\x01\xa2\x02\x03GPB\xaa\x02\x1eGoogle.Protobuf.WellKnownTypesb\x06proto3')
 )
-_sym_db.RegisterFileDescriptor(DESCRIPTOR)
 
 
 
@@ -36,17 +37,17 @@ _DOUBLEVALUE = _descriptor.Descriptor(
     _descriptor.FieldDescriptor(
       name='value', full_name='google.protobuf.DoubleValue.value', index=0,
       number=1, type=1, cpp_type=5, label=1,
-      has_default_value=False, default_value=0,
+        has_default_value=False, default_value=float(0),
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -67,17 +68,17 @@ _FLOATVALUE = _descriptor.Descriptor(
     _descriptor.FieldDescriptor(
       name='value', full_name='google.protobuf.FloatValue.value', index=0,
       number=1, type=2, cpp_type=6, label=1,
-      has_default_value=False, default_value=0,
+        has_default_value=False, default_value=float(0),
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -101,14 +102,14 @@ _INT64VALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=0,
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -132,14 +133,14 @@ _UINT64VALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=0,
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -163,14 +164,14 @@ _INT32VALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=0,
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -194,14 +195,14 @@ _UINT32VALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=0,
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -225,14 +226,14 @@ _BOOLVALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=False,
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -256,14 +257,14 @@ _STRINGVALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=_b("").decode('utf-8'),
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -287,14 +288,14 @@ _BYTESVALUE = _descriptor.Descriptor(
       has_default_value=False, default_value=_b(""),
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
-      options=None),
+        serialized_options=None, file=DESCRIPTOR),
   ],
   extensions=[
   ],
   nested_types=[],
   enum_types=[
   ],
-  options=None,
+    serialized_options=None,
   is_extendable=False,
   syntax='proto3',
   extension_ranges=[],
@@ -313,6 +314,7 @@ DESCRIPTOR.message_types_by_name['UInt32Value'] = _UINT32VALUE
 DESCRIPTOR.message_types_by_name['BoolValue'] = _BOOLVALUE
 DESCRIPTOR.message_types_by_name['StringValue'] = _STRINGVALUE
 DESCRIPTOR.message_types_by_name['BytesValue'] = _BYTESVALUE
+_sym_db.RegisterFileDescriptor(DESCRIPTOR)
 
 DoubleValue = _reflection.GeneratedProtocolMessageType('DoubleValue', (_message.Message,), dict(
   DESCRIPTOR = _DOUBLEVALUE,
@@ -377,7 +379,5 @@ BytesValue = _reflection.GeneratedProtocolMessageType('BytesValue', (_message.Me
   ))
 _sym_db.RegisterMessage(BytesValue)
 
-
-DESCRIPTOR.has_options = True
-DESCRIPTOR._options = _descriptor._ParseOptions(descriptor_pb2.FileOptions(), _b('\n\023com.google.protobufB\rWrappersProtoP\001\240\001\001\370\001\001\242\002\003GPB\252\002\036Google.Protobuf.WellKnownTypes'))
+DESCRIPTOR._options = None
 # @@protoc_insertion_point(module_scope)

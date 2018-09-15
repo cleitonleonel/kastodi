@@ -8,20 +8,22 @@ Without him this would not have been possible.
 # Pylint does not understand the protobuf objects correctly
 # pylint: disable=no-member
 
+import errno
+import json
 import logging
 import select
 import socket
 import ssl
-import json
+import sys
 import threading
 import time
 from collections import namedtuple
 from struct import pack, unpack
-import sys
 
 from . import cast_channel_pb2
 from .controllers import BaseController
 from .controllers.media import MediaController
+from .dial import CAST_TYPE_CHROMECAST, CAST_TYPE_AUDIO, CAST_TYPE_GROUP
 from .error import (
     ChromecastConnectionError,
     UnsupportedNamespace,
@@ -65,7 +67,8 @@ ERROR_REASON = 'reason'
 
 HB_PING_TIME = 10
 HB_PONG_TIME = 10
-POLL_TIME = 5
+POLL_TIME_BLOCKING = 5.0
+POLL_TIME_NON_BLOCKING = 0.01
 TIMEOUT_TIME = 30
 RETRY_TIME = 5
 
@@ -77,7 +80,13 @@ class InterruptLoop(Exception):
 
 def _json_from_message(message):
     """ Parses a PB2 message into JSON format. """
-    return json.loads(message.payload_utf8)
+    try:
+        return json.loads(message.payload_utf8)
+    except ValueError:
+        logger = logging.getLogger(__name__)
+        logger.warning("Ignoring invalid json in namespace %s: %s",
+                       message.namespace, message.payload_utf8)
+        return {}
 
 
 def _message_to_string(message, data=None):
@@ -106,16 +115,17 @@ def _is_ssl_timeout(exc):
                            "The read operation timed out")
 
 
+NetworkAddress = namedtuple('NetworkAddress',
+                            ['address', 'port'])
+
 ConnectionStatus = namedtuple('ConnectionStatus',
                               ['status', 'address'])
-
 
 CastStatus = namedtuple('CastStatus',
                         ['is_active_input', 'is_stand_by', 'volume_level',
                          'volume_muted', 'app_id', 'display_name',
                          'namespaces', 'session_id', 'transport_id',
                          'status_text'])
-
 
 LaunchFailure = namedtuple('LaunchStatus',
                            ['reason', 'app_id', 'request_id'])
@@ -126,6 +136,11 @@ class SocketClient(threading.Thread):
     """
     Class to interact with a Chromecast through a socket.
 
+    :param port: The port to use when connecting to the device, set to None to
+                 use the default of 8009. Special devices such as Cast Groups
+                 may return a different port number so we need to use that.
+    :param cast_type: The type of chromecast to connect to, see
+                      dial.CAST_TYPE_* for types.
     :param tries: Number of retries to perform if the connection fails.
                   None for inifinite retries.
     :param retry_wait: A floating point number specifying how many seconds to
@@ -133,7 +148,18 @@ class SocketClient(threading.Thread):
                        which is 5 seconds.
     """
 
-    def __init__(self, host, tries=None, retry_wait=None):
+    def __init__(self, host, port=None, cast_type=CAST_TYPE_CHROMECAST,
+                 **kwargs):
+        tries = kwargs.pop('tries', None)
+        timeout = kwargs.pop('timeout', None)
+        retry_wait = kwargs.pop('retry_wait', None)
+        self.blocking = kwargs.pop('blocking', True)
+
+        if self.blocking:
+            self.polltime = POLL_TIME_BLOCKING
+        else:
+            self.polltime = POLL_TIME_NON_BLOCKING
+
         super(SocketClient, self).__init__()
 
         self.daemon = True
@@ -142,9 +168,12 @@ class SocketClient(threading.Thread):
 
         self._force_recon = False
 
+        self.cast_type = cast_type
         self.tries = tries
+        self.timeout = timeout or TIMEOUT_TIME
         self.retry_wait = retry_wait or RETRY_TIME
         self.host = host
+        self.port = port or 8009
 
         self.source_id = "sender-0"
         self.stop = threading.Event()
@@ -164,7 +193,7 @@ class SocketClient(threading.Thread):
         self._handlers = {}
         self._connection_listeners = []
 
-        self.receiver_controller = ReceiverController()
+        self.receiver_controller = ReceiverController(cast_type, self.blocking)
         self.media_controller = MediaController()
         self.heartbeat_controller = HeartbeatController()
 
@@ -179,7 +208,8 @@ class SocketClient(threading.Thread):
             self.initialize_connection()
         except ChromecastConnectionError:
             self._report_connection_status(
-                ConnectionStatus(CONNECTION_STATUS_DISCONNECTED, None))
+                ConnectionStatus(CONNECTION_STATUS_DISCONNECTED,
+                                 NetworkAddress(self.host, self.port)))
             raise
 
     def initialize_connection(self):
@@ -202,41 +232,47 @@ class SocketClient(threading.Thread):
         self._open_channels = []
 
         self.connecting = True
-        retry_log_fun = self.logger.exception
+        retry_log_fun = self.logger.error
 
         while not self.stop.is_set() and (tries is None or tries > 0):
             try:
-                self.socket = ssl.wrap_socket(socket.socket())
-                self.socket.settimeout(TIMEOUT_TIME)
+                self.socket = new_socket()
+                self.socket.settimeout(self.timeout)
                 self._report_connection_status(
                     ConnectionStatus(CONNECTION_STATUS_CONNECTING,
-                                     (self.host, 8009)))
-                self.socket.connect((self.host, 8009))
+                                     NetworkAddress(self.host, self.port)))
+                self.socket.connect((self.host, self.port))
+                self.socket = ssl.wrap_socket(self.socket)
                 self.connecting = False
                 self._force_recon = False
                 self._report_connection_status(
                     ConnectionStatus(CONNECTION_STATUS_CONNECTED,
-                                     (self.host, 8009)))
+                                     NetworkAddress(self.host, self.port)))
                 self.receiver_controller.update_status()
                 self.heartbeat_controller.ping()
                 self.heartbeat_controller.reset()
 
                 self.logger.debug("Connected!")
                 break
-            except socket.error:
+            except OSError as err:
                 self.connecting = True
                 if self.stop.is_set():
-                    self.logger.exception(
-                        "Failed to connect, aborting due to stop signal.")
+                    self.logger.error(
+                        "Failed to connect: %s. aborting due to stop signal.",
+                        err)
                     raise ChromecastConnectionError("Failed to connect")
 
                 self._report_connection_status(
-                    ConnectionStatus(CONNECTION_STATUS_FAILED, None))
-                retry_log_fun("Failed to connect, retrying in %fs",
-                              self.retry_wait)
-                retry_log_fun = self.logger.debug
+                    ConnectionStatus(CONNECTION_STATUS_FAILED,
+                                     NetworkAddress(self.host, self.port)))
 
-                time.sleep(self.retry_wait)
+                # Only sleep if we have another retry remaining
+                if tries is None or tries > 1:
+                    retry_log_fun("Failed to connect, retrying in %.1fs",
+                                  self.retry_wait)
+                    retry_log_fun = self.logger.debug
+                    time.sleep(self.retry_wait)
+
                 if tries:
                     tries -= 1
         else:
@@ -259,7 +295,7 @@ class SocketClient(threading.Thread):
         new_channel = self.destination_id != cast_status.transport_id
 
         if new_channel:
-            self._disconnect_channel(self.destination_id)
+            self.disconnect_channel(self.destination_id)
 
         self.app_namespaces = cast_status.namespaces
         self.destination_id = cast_status.transport_id
@@ -297,66 +333,86 @@ class SocketClient(threading.Thread):
 
     def run(self):
         """ Start polling the socket. """
-        # pylint: disable=too-many-branches
         self.heartbeat_controller.reset()
         self._force_recon = False
+        logging.debug("Thread started...")
         while not self.stop.is_set():
 
-            try:
-                if not self._check_connection():
-                    continue
-            except ChromecastConnectionError:
+            if self.run_once() == 1:
                 break
-
-            # poll the socket
-            can_read, _, _ = select.select([self.socket], [], [], POLL_TIME)
-
-            # read messages from chromecast
-            message = data = None
-            if self.socket in can_read and not self._force_recon:
-                try:
-                    message = self._read_message()
-                except InterruptLoop as exc:
-                    if self.stop.is_set():
-                        self.logger.info(
-                            "Stopped while reading message, disconnecting.")
-                        break
-                    else:
-                        self.logger.exception(
-                            "Interruption caught without being stopped %s",
-                            exc)
-                        break
-                except ssl.SSLError as exc:
-                    if exc.errno == ssl.SSL_ERROR_EOF:
-                        if self.stop.is_set():
-                            break
-                    raise
-                except socket.error:
-                    self._force_recon = True
-                    self.logger.info('Error reading from socket.')
-                else:
-                    data = _json_from_message(message)
-            if not message:
-                continue
-
-            # If we are stopped after receiving a message we skip the message
-            # and tear down the connection
-            if self.stop.is_set():
-                break
-
-            # See if any handlers will accept this message
-            self._route_message(message, data)
-
-            if REQUEST_ID in data:
-                callback = self._request_callbacks.pop(data[REQUEST_ID], None)
-                if callback is not None:
-                    event = callback['event']
-                    callback['response'] = data
-
-                    event.set()
 
         # Clean up
         self._cleanup()
+
+    def run_once(self):
+        """
+        Use run_once() in your own main loop after you
+        receive something on the socket (get_socket()).
+        """
+        # pylint: disable=too-many-branches, too-many-return-statements
+
+        try:
+            if not self._check_connection():
+                return 0
+        except ChromecastConnectionError:
+            return 1
+
+        # poll the socket
+        can_read, _, _ = select.select([self.socket], [], [], self.polltime)
+
+        # read messages from chromecast
+        message = data = None
+        if self.socket in can_read and not self._force_recon:
+            try:
+                message = self._read_message()
+            except InterruptLoop as exc:
+                if self.stop.is_set():
+                    self.logger.info(
+                        "Stopped while reading message, disconnecting.")
+                else:
+                    self.logger.error(
+                        "Interruption caught without being stopped: %s",
+                        exc)
+                return 1
+            except ssl.SSLError as exc:
+                if exc.errno == ssl.SSL_ERROR_EOF:
+                    if self.stop.is_set():
+                        return 1
+                raise
+            except socket.error:
+                self._force_recon = True
+                self.logger.error('Error reading from socket.')
+            else:
+                data = _json_from_message(message)
+        if not message:
+            return 0
+
+        # If we are stopped after receiving a message we skip the message
+        # and tear down the connection
+        if self.stop.is_set():
+            return 1
+
+        # See if any handlers will accept this message
+        self._route_message(message, data)
+
+        if REQUEST_ID in data:
+            callback = self._request_callbacks.pop(data[REQUEST_ID], None)
+            if callback is not None:
+                event = callback['event']
+                callback['response'] = data
+                function = callback['function']
+                event.set()
+                if function:
+                    function(data)
+
+        return 0
+
+    def get_socket(self):
+        """
+        Returns the socket of the connection to use it in you own
+        main loop.
+        """
+        return self.socket
 
     def _check_connection(self):
         """
@@ -378,7 +434,8 @@ class SocketClient(threading.Thread):
 
         if reset:
             self._report_connection_status(
-                ConnectionStatus(CONNECTION_STATUS_LOST, None))
+                ConnectionStatus(CONNECTION_STATUS_LOST,
+                                 NetworkAddress(self.host, self.port)))
             try:
                 self.initialize_connection()
             except ChromecastConnectionError:
@@ -409,8 +466,8 @@ class SocketClient(threading.Thread):
                             _message_to_string(message, data))
             except Exception:  # pylint: disable=broad-except
                 self.logger.exception(
-                    (u"Exception caught while sending message to "
-                     u"controller %s: %s"),
+                    ("Exception caught while sending message to "
+                     "controller %s: %s"),
                     type(self._handlers[message.namespace]).__name__,
                     _message_to_string(message, data))
 
@@ -423,7 +480,7 @@ class SocketClient(threading.Thread):
         """ Cleanup open channels and handlers """
         for channel in self._open_channels:
             try:
-                self._disconnect_channel(channel)
+                self.disconnect_channel(channel)
             except Exception:  # pylint: disable=broad-except
                 pass
 
@@ -435,7 +492,8 @@ class SocketClient(threading.Thread):
 
         self.socket.close()
         self._report_connection_status(
-            ConnectionStatus(CONNECTION_STATUS_DISCONNECTED, None))
+            ConnectionStatus(CONNECTION_STATUS_DISCONNECTED,
+                             NetworkAddress(self.host, self.port)))
         self.connecting = True
 
     def _report_connection_status(self, status):
@@ -488,7 +546,7 @@ class SocketClient(threading.Thread):
 
     # pylint: disable=too-many-arguments
     def send_message(self, destination_id, namespace, data,
-                     inc_session_id=False, wait_for_response=False,
+                     inc_session_id=False, callback_function=False,
                      no_add_request_id=False, force=False):
         """ Send a message to the Chromecast. """
 
@@ -528,31 +586,28 @@ class SocketClient(threading.Thread):
             raise PyChromecastStopped("Socket client's thread is stopped.")
         if not self.connecting and not self._force_recon:
             try:
+                if not no_add_request_id and callback_function:
+                    self._request_callbacks[request_id] = {
+                        'event': threading.Event(),
+                        'response': None,
+                        'function': callback_function,
+                    }
                 self.socket.sendall(be_size + msg.SerializeToString())
             except socket.error:
+                self._request_callbacks.pop(request_id, None)
                 self._force_recon = True
                 self.logger.info('Error writing to socket.')
         else:
             raise NotConnected("Chromecast is connecting...")
 
-        response = None
-        if not no_add_request_id and wait_for_response:
-            callback = self._request_callbacks[request_id] = {
-                'event': threading.Event(),
-                'response': None,
-            }
-            callback['event'].wait()
-            response = callback.get('response')
-        return response
-
     def send_platform_message(self, namespace, message, inc_session_id=False,
-                              wait_for_response=False):
+                              callback_function_param=False):
         """ Helper method to send a message to the platform. """
         return self.send_message(PLATFORM_DESTINATION_ID, namespace, message,
-                                 inc_session_id, wait_for_response)
+                                 inc_session_id, callback_function_param)
 
     def send_app_message(self, namespace, message, inc_session_id=False,
-                         wait_for_response=False):
+                         callback_function_param=False):
         """ Helper method to send a message to current running app. """
         if namespace not in self.app_namespaces:
             raise UnsupportedNamespace(
@@ -561,7 +616,7 @@ class SocketClient(threading.Thread):
                                             ", ".join(self.app_namespaces)))
 
         return self.send_message(self.destination_id, namespace, message,
-                                 inc_session_id, wait_for_response)
+                                 inc_session_id, callback_function_param)
 
     def register_connection_listener(self, listener):
         """ Register a connection listener for when the socket connection
@@ -588,7 +643,7 @@ class SocketClient(threading.Thread):
                      'connectionType': 1}},
                 no_add_request_id=True)
 
-    def _disconnect_channel(self, destination_id):
+    def disconnect_channel(self, destination_id):
         """ Disconnect a channel with destination_id. """
         if destination_id in self._open_channels:
             self.send_message(
@@ -623,12 +678,15 @@ class ConnectionController(BaseController):
             return True
 
         if data[MESSAGE_TYPE] == TYPE_CLOSE:
-            self._socket_client.handle_channel_disconnected()
+            # The cast device is asking us to acknowledge closing this channel.
+            self._socket_client.disconnect_channel(message.source_id)
+
+            # Schedule a status update so that a channel is created.
+            self._socket_client.receiver_controller.update_status()
 
             return True
 
-        else:
-            return False
+        return False
 
 
 class HeartbeatController(BaseController):
@@ -651,7 +709,7 @@ class HeartbeatController(BaseController):
                     PLATFORM_DESTINATION_ID, self.namespace,
                     {MESSAGE_TYPE: TYPE_PONG}, no_add_request_id=True)
             except PyChromecastStopped:
-                self._socket_client.logger.exception(
+                self._socket_client.logger.debug(
                     "Heartbeat error when sending response, "
                     "Chromecast connection has stopped")
 
@@ -661,8 +719,7 @@ class HeartbeatController(BaseController):
             self.reset()
             return True
 
-        else:
-            return False
+        return False
 
     def ping(self):
         """ Send a ping message. """
@@ -686,16 +743,23 @@ class HeartbeatController(BaseController):
 
 
 class ReceiverController(BaseController):
-    """ Controller to interact with the Chromecast platform. """
+    """
+    Controller to interact with the Chromecast platform.
 
-    def __init__(self):
+    :param cast_type: Type of Chromecast device.
+    """
+
+    def __init__(self, cast_type=CAST_TYPE_CHROMECAST, blocking=True):
         super(ReceiverController, self).__init__(
             NS_RECEIVER, target_platform=True)
 
         self.status = None
         self.launch_failure = None
         self.app_to_launch = None
+        self.cast_type = cast_type
+        self.blocking = blocking
         self.app_launch_event = threading.Event()
+        self.app_launch_event_function = None
 
         self._status_listeners = []
         self._launch_error_listeners = []
@@ -717,8 +781,7 @@ class ReceiverController(BaseController):
 
             return True
 
-        else:
-            return False
+        return False
 
     def register_status_listener(self, listener):
         """ Register a status listener for when a new Chromecast status
@@ -732,71 +795,59 @@ class ReceiverController(BaseController):
             listener.new_launch_error(launch_failure) """
         self._launch_error_listeners.append(listener)
 
-    def update_status(self, blocking=False):
+    def update_status(self, callback_function_param=False):
         """ Sends a message to the Chromecast to update the status. """
         self.logger.debug("Receiver:Updating status")
         self.send_message({MESSAGE_TYPE: TYPE_GET_STATUS},
-                          wait_for_response=blocking)
+                          callback_function=callback_function_param)
 
-    def launch_app(self, app_id, force_launch=False, block_till_launched=True):
+    def launch_app(self, app_id, force_launch=False, callback_function=False):
         """ Launches an app on the Chromecast.
 
             Will only launch if it is not currently running unless
             force_launch=True. """
-        # If this is called too quickly after launch, we don't have the info.
-        # We need the info if we are not force launching to check running app.
-        if not force_launch and self.app_id is None:
-            self.update_status(True)
 
+        if not force_launch and self.app_id is None:
+            self.update_status(lambda response:
+                               self._send_launch_message(app_id, force_launch,
+                                                         callback_function))
+        else:
+            self._send_launch_message(app_id, force_launch, callback_function)
+
+    def _send_launch_message(self, app_id, force_launch=False,
+                             callback_function=False):
         if force_launch or self.app_id != app_id:
             self.logger.info("Receiver:Launching app %s", app_id)
 
-            # If we are blocking we need to wait for the status update or
-            # launch failure before returning
+            self.app_to_launch = app_id
+            self.app_launch_event.clear()
+            self.app_launch_event_function = callback_function
             self.launch_failure = None
-            if block_till_launched:
-                self.app_to_launch = app_id
-                self.app_launch_event.clear()
 
-            response = self.send_message({MESSAGE_TYPE: TYPE_LAUNCH,
-                                          APP_ID: app_id},
-                                         wait_for_response=block_till_launched)
-
-            if block_till_launched:
-                is_app_started = False
-                if response:
-                    response_type = response[MESSAGE_TYPE]
-                    if response_type == TYPE_RECEIVER_STATUS:
-                        new_status = self._parse_status(response)
-                        new_app_id = new_status.app_id
-                        if new_app_id == app_id:
-                            is_app_started = True
-                            self.app_to_launch = None
-                            self.app_launch_event.clear()
-                    elif response_type == TYPE_LAUNCH_ERROR:
-                        self.app_to_launch = None
-                        self.app_launch_event.clear()
-                        launch_error = self._parse_launch_error(response)
-                        raise LaunchError(
-                            "Failed to launch app: {}, Reason: {}".format(
-                                app_id, launch_error.reason))
-
-                if not is_app_started:
-                    self.app_launch_event.wait()
-                    if self.launch_failure:
-                        raise LaunchError(
-                            "Failed to launch app: {}, Reason: {}".format(
-                                app_id, self.launch_failure.reason))
+            self.send_message({MESSAGE_TYPE: TYPE_LAUNCH,
+                               APP_ID: app_id},
+                              callback_function=lambda response:
+                              self._block_till_launched(app_id))
         else:
             self.logger.info(
                 "Not launching app %s - already running", app_id)
+            if callback_function:
+                callback_function()
 
-    def stop_app(self, block_till_stopped=True):
+    def _block_till_launched(self, app_id):
+        if self.blocking:
+            self.app_launch_event.wait()
+            if self.launch_failure:
+                raise LaunchError(
+                    "Failed to launch app: {}, Reason: {}".format(
+                        app_id, self.launch_failure.reason))
+
+    def stop_app(self, callback_function_param=False):
         """ Stops the current running app on the Chromecast. """
         self.logger.info("Receiver:Stopping current app '%s'", self.app_id)
         return self.send_message(
             {MESSAGE_TYPE: 'STOP'},
-            inc_session_id=True, wait_for_response=block_till_stopped)
+            inc_session_id=True, callback_function=callback_function_param)
 
     def set_volume(self, volume):
         """ Allows to set volume. Should be value between 0..1.
@@ -816,11 +867,12 @@ class ReceiverController(BaseController):
              'volume': {'muted': muted}})
 
     @staticmethod
-    def _parse_status(data):
+    def _parse_status(data, cast_type):
         """
         Parses a STATUS message and returns a CastStatus object.
 
         :type data: dict
+        :param cast_type: Type of Chromecast.
         :rtype: CastStatus
         """
         data = data.get('status', {})
@@ -832,9 +884,11 @@ class ReceiverController(BaseController):
         except KeyError:
             app_data = {}
 
+        is_audio = cast_type in (CAST_TYPE_AUDIO, CAST_TYPE_GROUP)
+
         status = CastStatus(
-            data.get('isActiveInput', False),
-            data.get('isStandBy', True),
+            data.get('isActiveInput', None if is_audio else False),
+            data.get('isStandBy', None if is_audio else True),
             volume_data.get('level', 1.0),
             volume_data.get('muted', False),
             app_data.get(APP_ID),
@@ -843,22 +897,25 @@ class ReceiverController(BaseController):
             app_data.get(SESSION_ID),
             app_data.get('transportId'),
             app_data.get('statusText', '')
-            )
+        )
         return status
 
     def _process_get_status(self, data):
         """ Processes a received STATUS message and notifies listeners. """
-        status = self._parse_status(data)
+        status = self._parse_status(data, self.cast_type)
         is_new_app = self.app_id != status.app_id and self.app_to_launch
         self.status = status
+
+        self.logger.debug("Received status: %s", self.status)
+        self._report_status()
 
         if is_new_app and self.app_to_launch == self.app_id:
             self.app_to_launch = None
             self.app_launch_event.set()
-
-        self.logger.debug("Received status: %s", self.status)
-
-        self._report_status()
+            if self.app_launch_event_function:
+                self.logger.debug("Start app_launch_event_function...")
+                self.app_launch_event_function()
+                self.app_launch_event_function = None
 
     def _report_status(self):
         """ Reports the current status to all listeners. """
@@ -912,3 +969,29 @@ class ReceiverController(BaseController):
         self._report_status()
 
         self._status_listeners[:] = []
+
+
+def new_socket():
+    """
+    Create a new socket with OS-specific parameters
+
+    Try to set SO_REUSEPORT for BSD-flavored systems if it's an option.
+    Catches errors if not.
+    """
+    new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    new_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    try:
+        # noinspection PyUnresolvedReferences
+        reuseport = socket.SO_REUSEPORT
+    except AttributeError:
+        pass
+    else:
+        try:
+            new_sock.setsockopt(socket.SOL_SOCKET, reuseport, 1)
+        except (OSError, socket.error) as err:
+            # OSError on python 3, socket.error on python 2
+            if err.errno != errno.ENOPROTOOPT:
+                raise
+
+    return new_sock

@@ -185,7 +185,7 @@ class CastControlsDialog(pyxbmct.AddonDialogWindow):
         :return: None
         """
 
-        self.cast.media_controller.update_status(blocking=True)
+        self.cast.media_controller.update_status()
         if self.cast.media_controller.status.duration:
             current_time = self.cast.media_controller.status.current_time
             total_time = self.cast.media_controller.status.duration
